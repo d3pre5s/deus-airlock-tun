@@ -1,0 +1,56 @@
+name: Upstream mainline mirror
+
+on:
+  schedule:
+    - cron: '37 6 * * *'
+  workflow_dispatch:
+
+permissions: {}
+
+concurrency:
+  group: upstream-mainline-mirror
+  cancel-in-progress: false
+
+jobs:
+  mirror:
+    if: github.repository == 'd3pre5s/deus-airlock-tun'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: write
+    env:
+      SOURCE: https://github.com/SagerNet/sing-tun.git
+      SOURCE_REF: refs/heads/main
+      DESTINATION: https://github.com/d3pre5s/deus-airlock-tun.git
+      DESTINATION_REF: refs/heads/upstream-mirror
+    steps:
+      - name: Fast-forward the dedicated mirror
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+
+          source_line=$(git ls-remote --exit-code "$SOURCE" "$SOURCE_REF")
+          source_sha=${source_line%%$'\t'*}
+          [[ "$source_sha" =~ ^[0-9a-f]{40}$ ]]
+
+          destination_line=$(git ls-remote "$DESTINATION" "$DESTINATION_REF")
+          destination_sha=${destination_line%%$'\t'*}
+          if [[ "$source_sha" == "$destination_sha" ]]; then
+            printf 'Mirror already at %s.\n' "$source_sha" >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+
+          mirror_dir=$(mktemp -d)
+          git -C "$mirror_dir" init --bare --quiet
+          git -C "$mirror_dir" fetch --no-tags "$SOURCE" "$SOURCE_REF"
+          fetched_sha=$(git -C "$mirror_dir" rev-parse 'FETCH_HEAD^{commit}')
+          [[ "$fetched_sha" == "$source_sha" ]]
+
+          gh auth setup-git --hostname github.com
+          git -C "$mirror_dir" push "$DESTINATION" "$source_sha:$DESTINATION_REF"
+
+          verified=$(git ls-remote --exit-code "$DESTINATION" "$DESTINATION_REF")
+          [[ "${verified%%$'\t'*}" == "$source_sha" ]]
+          printf 'Mirrored %s at %s.\n' "$SOURCE_REF" "$source_sha" >> "$GITHUB_STEP_SUMMARY"
